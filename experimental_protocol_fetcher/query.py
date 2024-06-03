@@ -1,8 +1,10 @@
-from typing import List, Optional, Dict
-import json
+from typing import List, Optional, Dict, Callable, Tuple
 from kgforge.core import KnowledgeGraphForge
 from getpass import getpass
+
+from experimental_protocol_fetcher.logger import logger
 from helpers import _as_list, allocate
+
 
 type_to_definition = {
     "NeuronMorphology": "",
@@ -24,44 +26,11 @@ def _resource_get(resource, field, type_):
 def _locate_type(me_model_has_part, type_):
     res = next((i.get_identifier() for i in _as_list(me_model_has_part) if type_ in _as_list(i.get_type())), None)
     if res is None:
-        raise Exception(f"Couldn't find {type_} in hasPart of MEModel {me_model_id} ")
+        raise Exception(f"Couldn't find {type_} in hasPart of MEModel")
     return res
 
 
-def get_protocols_on_me_model(
-        me_model_id: str,
-        token: str,
-        org="bbp",
-        project="atlas",
-        es_view="https://bbp.epfl.ch/neurosciencegraph/data/views/aggreg-es/sbo",
-        sp_view="https://bbp.epfl.ch/neurosciencegraph/data/views/aggreg-sp/sbo",
-        retrieve=True,
-        is_prod=True
-) -> Dict:
-    # TODO no sparql path to get trace ids because I don't think I can assume
-    #  the MEModel and the EModel and the EModelWorkflow and ExtractionTargetsConfiguration are in the same bucket?
-    """
-    For all emodels with workflow configurations: we can find the list of Traces by going into generation/activity/followedWorkflow and then within the Resource linked there
-    (of type EModelWorkflow), look for the property hasPart and pick the entry of type ExtractionTargetsConfiguration,
-    and then within this resource, Traces are listed in the uses property.
-    """
-
-    def retrieve_or_raise(id_, type_):
-        e = forge_search.retrieve(id_, cross_bucket=True)
-        if e is None:
-            raise Exception(f"Could not find {type_} {id_}")
-        return e
-
-    forge_search = allocate(org, project, token=token, es_view=es_view, sp_view=sp_view)
-
-    forge_protocols = allocate("bbp", "protocols", token=token) if retrieve else None
-
-    me_model_resource = retrieve_or_raise(me_model_id, "MEModel")
-
-    me_model_has_part = _resource_get(me_model_resource, "hasPart", "MEModel")
-
-    morphology_id = _locate_type(me_model_has_part, "NeuronMorphology")
-    e_model_id = _locate_type(me_model_has_part, "EModel")
+def get_protocols_on_e_model(e_model_id: str, retrieve_or_raise: Callable, make_entry: Callable) -> Dict:
 
     e_model_resource = retrieve_or_raise(e_model_id, "EModel")
     e_model_generation = _resource_get(e_model_resource, "generation", "EModel")
@@ -85,6 +54,31 @@ def get_protocols_on_me_model(
 
     traces_id = [i.get_identifier() for i in extraction_targets_configuration_uses]
 
+    emodel_payload = make_entry(e_model_id, "EModel")
+    emodel_payload["traces"] = [make_entry(trace_id, "Trace") for trace_id in traces_id]
+
+    return emodel_payload
+
+
+def init(
+        token: str,
+        org="bbp",
+        project="atlas",
+        es_view="https://bbp.epfl.ch/neurosciencegraph/data/views/aggreg-es/sbo",
+        sp_view="https://bbp.epfl.ch/neurosciencegraph/data/views/aggreg-sp/sbo",
+        retrieve=True,
+        is_prod=True
+) -> Tuple[KnowledgeGraphForge, KnowledgeGraphForge, Callable, Callable]:
+
+    forge_search = allocate(org, project, token=token, es_view=es_view, sp_view=sp_view, is_prod=is_prod)
+    forge_protocols = allocate("bbp", "protocols", token=token, is_prod=is_prod) if retrieve else None
+
+    def retrieve_or_raise(id_, type_):
+        e = forge_search.retrieve(id_, cross_bucket=True)
+        if e is None:
+            raise Exception(f"Could not find {type_} {id_}")
+        return e
+
     def make_entry(id_, type_):
         return {
             "about": {
@@ -95,15 +89,36 @@ def get_protocols_on_me_model(
             **find_protocols(id_, parent=[], forge_search=forge_search, forge_protocols=forge_protocols, retrieve=retrieve)
         }
 
+    return forge_search, forge_protocols, retrieve_or_raise, make_entry
+
+
+def get_protocols_on_me_model(
+        me_model_id: str, retrieve_or_raise: Callable, make_entry: Callable
+) -> Dict:
+    # TODO no sparql path to get trace ids because I don't think I can assume
+    #  the MEModel and the EModel and the EModelWorkflow and ExtractionTargetsConfiguration are in the same bucket?
+    """
+    For all emodels with workflow configurations: we can find the list of Traces by going into generation/activity/followedWorkflow and then within the Resource linked there
+    (of type EModelWorkflow), look for the property hasPart and pick the entry of type ExtractionTargetsConfiguration,
+    and then within this resource, Traces are listed in the uses property.
+    """
+
+    me_model_resource = retrieve_or_raise(me_model_id, "MEModel")
+    me_model_has_part = _resource_get(me_model_resource, "hasPart", "MEModel")
+    morphology_id = _locate_type(me_model_has_part, "NeuronMorphology")
+    e_model_id = _locate_type(me_model_has_part, "EModel")
+
+    emodel_payload = get_protocols_on_e_model(e_model_id, retrieve_or_raise, make_entry)
+
     payload = make_entry(me_model_id, "MEModel")
     payload["morphology"] = make_entry(morphology_id, "NeuronMorphology")
-    payload["emodel"] = make_entry(e_model_id, "EModel")
-    payload["emodel"]["traces"] = [make_entry(trace_id, "Trace") for trace_id in traces_id]
+    payload["emodel"] = emodel_payload
 
     return payload
 
 
-def find_protocols(id_: str, forge_search: KnowledgeGraphForge, parent: List, forge_protocols: KnowledgeGraphForge, retrieve: bool) -> Dict:  # Applicable for morphology, trace, emodel
+def find_protocols(id_: str, forge_search: KnowledgeGraphForge, parent: List, forge_protocols: KnowledgeGraphForge, retrieve: bool) -> Dict:
+    # Applicable for morphology, trace, emodel
 
     resource = forge_search.retrieve(id_, cross_bucket=True)
     # if resource is None:
@@ -173,10 +188,7 @@ def get_protocols(
         is_prod=True
 ):
     forge_search = allocate(org, project, is_prod=is_prod, token=token, es_view=es_view, sp_view=sp_view)
-    if retrieve:
-        forge_protocols = allocate("bbp", "protocols", is_prod=True, token=token)
-    else:
-        forge_protocols = None
+    forge_protocols = allocate("bbp", "protocols", is_prod=True, token=token) if retrieve else None
 
     return find_protocols(id_, parent=[], forge_search=forge_search, forge_protocols=forge_protocols, retrieve=retrieve)
 
@@ -184,9 +196,14 @@ def get_protocols(
 if __name__ == "__main__":
 
     token = getpass("Production token")
-    me_model_id = "https://bbp.epfl.ch/data/bbp/mmb-point-neuron-framework-model/fc98f29b-a608-44d2-b9c4-8f4b6dbfee8d"
-    res = get_protocols_on_me_model(me_model_id, token, retrieve=True)
-    print(json.dumps(res, indent=4))
+    forge_search, forge_protocols, retrieve_or_raise, make_entry = init(token=token, is_prod=True, retrieve=True)
+
+    # me_model_id = "https://bbp.epfl.ch/data/bbp/mmb-point-neuron-framework-model/fc98f29b-a608-44d2-b9c4-8f4b6dbfee8d"
+    # res = get_protocols_on_me_model(me_model_id, retrieve_or_raise, make_entry)
+    # print(json.dumps(res, indent=4))
+
+    e_model_id = "https://bbp.epfl.ch/data/bbp/mmb-point-neuron-framework-model/642fbfec-3e40-4123-8596-650bd03daf7b"
+    get_protocols_on_e_model(e_model_id,  retrieve_or_raise, make_entry)
 
     # token = get_token(is_prod=True)
     # id_ = "https://bbp.epfl.ch/neurosciencegraph/data/neuronmorphologies/0993c0e9-e83a-4571-a4f0-7a1ee738d0b4"
