@@ -1,0 +1,17 @@
+.ipynb_checkpoints
+.DS_Store
+.idea/*
+.eggs/*
+*.egg-info/*
+**/__pycache__/
+*.err
+*.out
+*.sbatch
+**/__init__.pyc
+.pylintrc
+./data/*
+build/
+draft/
+token/
+venv/
+notebooks
