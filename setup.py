@@ -13,7 +13,7 @@ setup(
     author="Blue Brain Project, EPFL",
     use_scm_version={
         "relative_to": __file__,
-        "write_to": "version.py",
+        "write_to": "experimental_protocol_fetcher/version.py",
         "write_to_template": "__version__ = '{version}'\n",
     },
     description="Tools for retrieving experimental protocols used in generating data.",
