@@ -1,16 +1,17 @@
 from typing import List, Optional, Dict, Callable, Tuple
 from kgforge.core import KnowledgeGraphForge
 from getpass import getpass
+import json
 
 from experimental_protocol_fetcher.logger import logger
 from helpers import _as_list, allocate
 
 
 type_to_definition = {
-    "NeuronMorphology": "",
+    "NeuronMorphology": "Digital reconstruction of the geometry of a neuron. The reconstruction is always an approximation of the neuron and consists of a series of truncated cones or frusta.",
     "MEModel": "",
     "EModel": "",
-    "Trace": ""
+    "Trace": "Electrophysiological recording of a neuron. It consists of a measurement of the neuron (normally voltage or current) over time."
 }  # TODO query from ontology
 
 
@@ -47,15 +48,25 @@ def get_protocols_on_e_model(e_model_id: str, retrieve_or_raise: Callable, make_
     e_model_workflow_hasPart = _resource_get(e_model_workflow_resource, "hasPart", "EModelWorkflow")
 
     extraction_targets_configuration_id = next(i.get_identifier() for i in _as_list(e_model_workflow_hasPart) if "ExtractionTargetsConfiguration" in _as_list(i.get_type()))
+    e_model_configuration_id = next(i.get_identifier() for i in _as_list(e_model_workflow_hasPart) if "EModelConfiguration" in _as_list(i.get_type()))
 
     extraction_targets_configuration_resource = retrieve_or_raise(extraction_targets_configuration_id, "ExtractionTargetsConfiguration")
 
+    e_model_configuration = retrieve_or_raise(e_model_configuration_id, "EModelConfiguration")
+
     extraction_targets_configuration_uses = _resource_get(extraction_targets_configuration_resource, "uses", "ExtractionTargetsConfiguration")
+    e_model_uses = _resource_get(e_model_configuration, "uses", "EModelConfiguration")
+
+    neuron_morphology_ids = [i.get_identifier() for i in e_model_uses if "NeuronMorphology" in _as_list(i.get_type())]
+
+    if len(neuron_morphology_ids) != 1:
+        raise Exception(f"Unexpected number of neuron morphologies inside the EModel: {len(neuron_morphology_ids)} instead of 1")
 
     traces_id = [i.get_identifier() for i in extraction_targets_configuration_uses]
 
     emodel_payload = make_entry(e_model_id, "EModel")
     emodel_payload["traces"] = [make_entry(trace_id, "Trace") for trace_id in traces_id]
+    emodel_payload["morphology"] = make_entry(neuron_morphology_ids[0], "NeuronMorphology")
 
     return emodel_payload
 
@@ -74,7 +85,7 @@ def init(
     forge_protocols = allocate("bbp", "protocols", token=token, is_prod=is_prod) if retrieve else None
 
     def retrieve_or_raise(id_, type_):
-        e = forge_search.retrieve(id_, cross_bucket=True)
+        e = forge_search._store.retrieve(id_, cross_bucket=True, version=None)
         if e is None:
             raise Exception(f"Could not find {type_} {id_}")
         return e
@@ -95,8 +106,6 @@ def init(
 def get_protocols_on_me_model(
         me_model_id: str, retrieve_or_raise: Callable, make_entry: Callable
 ) -> Dict:
-    # TODO no sparql path to get trace ids because I don't think I can assume
-    #  the MEModel and the EModel and the EModelWorkflow and ExtractionTargetsConfiguration are in the same bucket?
     """
     For all emodels with workflow configurations: we can find the list of Traces by going into generation/activity/followedWorkflow and then within the Resource linked there
     (of type EModelWorkflow), look for the property hasPart and pick the entry of type ExtractionTargetsConfiguration,
@@ -117,12 +126,12 @@ def get_protocols_on_me_model(
     return payload
 
 
-def find_protocols(id_: str, forge_search: KnowledgeGraphForge, parent: List, forge_protocols: KnowledgeGraphForge, retrieve: bool) -> Dict:
-    # Applicable for morphology, trace, emodel
+def find_protocols(id_: str, forge_search: KnowledgeGraphForge, parent: List, forge_protocols: KnowledgeGraphForge, retrieve: bool, raise_: bool = False) -> Dict:
 
     resource = forge_search.retrieve(id_, cross_bucket=True)
-    # if resource is None:
-    #     raise Exception(f"Couldn't find referenced entity {id_}")
+
+    if resource is None and raise_:
+        raise Exception(f"Couldn't find referenced entity {id_}")
 
     all_protocols = {"found": resource is not None, "protocols": [], "derivations": {}}
 
@@ -164,13 +173,17 @@ def find_protocols(id_: str, forge_search: KnowledgeGraphForge, parent: List, fo
         derivations = []
 
     derivation_ids = [i.get_identifier() for i in _as_list(derivations)] if derivations else []
+
     if len(derivation_ids) > 0:
         logger.info(f"Resource {id_} (path: {parent}) has derivation {derivations}, look into its protocols")
+        new_parent = parent + [id_]
 
-    derivation_protocols = [
-        {"id": i, **find_protocols(i, parent=parent + [id_], forge_search=forge_search, forge_protocols=forge_protocols, retrieve=retrieve)}
-        for i in derivation_ids
-    ]
+        derivation_protocols = [
+            {"id": i, **find_protocols(i, parent=new_parent, forge_search=forge_search, forge_protocols=forge_protocols, retrieve=retrieve)}
+            for i in derivation_ids
+        ]
+    else:
+        derivation_protocols = []
 
     all_protocols["derivations"] = derivation_protocols
 
@@ -195,15 +208,15 @@ def get_protocols(
 
 if __name__ == "__main__":
 
-    token = getpass("Production token")
+    token = ""
     forge_search, forge_protocols, retrieve_or_raise, make_entry = init(token=token, is_prod=True, retrieve=True)
+    me_model_id = "https://bbp.epfl.ch/data/bbp/mmb-point-neuron-framework-model/fc98f29b-a608-44d2-b9c4-8f4b6dbfee8d"
+    res = get_protocols_on_me_model(me_model_id, retrieve_or_raise, make_entry)
+    print(json.dumps(res, indent=4))
 
-    # me_model_id = "https://bbp.epfl.ch/data/bbp/mmb-point-neuron-framework-model/fc98f29b-a608-44d2-b9c4-8f4b6dbfee8d"
-    # res = get_protocols_on_me_model(me_model_id, retrieve_or_raise, make_entry)
+    # e_model_id = "https://bbp.epfl.ch/data/bbp/mmb-point-neuron-framework-model/642fbfec-3e40-4123-8596-650bd03daf7b"
+    # res = get_protocols_on_e_model(e_model_id,  retrieve_or_raise, make_entry)
     # print(json.dumps(res, indent=4))
-
-    e_model_id = "https://bbp.epfl.ch/data/bbp/mmb-point-neuron-framework-model/642fbfec-3e40-4123-8596-650bd03daf7b"
-    get_protocols_on_e_model(e_model_id,  retrieve_or_raise, make_entry)
 
     # token = get_token(is_prod=True)
     # id_ = "https://bbp.epfl.ch/neurosciencegraph/data/neuronmorphologies/0993c0e9-e83a-4571-a4f0-7a1ee738d0b4"

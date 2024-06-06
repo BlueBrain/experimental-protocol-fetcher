@@ -1,4 +1,5 @@
 from enum import Enum
+from typing import Optional, Dict
 
 import requests
 from kgforge.core import KnowledgeGraphForge
