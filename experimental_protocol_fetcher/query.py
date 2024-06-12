@@ -9,8 +9,8 @@ from helpers import _as_list, allocate
 
 type_to_definition = {
     "NeuronMorphology": "Digital reconstruction of the geometry of a neuron. The reconstruction is always an approximation of the neuron and consists of a series of truncated cones or frusta.",
-    "MEModel": "",
-    "EModel": "",
+    "MEModel": "MEModel or morpho-electrical model is the combination of a morphology reconstruction and a set of electrical parameters which define a neuron as an equivalent circuit.",
+    "EModel": "EModel or electrical-model consists of a set of electrical parameters which define a neuron as an equivalent circuit. These parameters include passive properties (e.g., membrane capacitance) or also active properties (e.g., maximum conductance of the sodium channel). It is important to note that the same emodel combined with different morphologies can produce different electrical behaviour.",
     "Trace": "Electrophysiological recording of a neuron. It consists of a measurement of the neuron (normally voltage or current) over time."
 }  # TODO query from ontology
 
