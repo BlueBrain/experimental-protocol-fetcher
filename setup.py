@@ -27,7 +27,7 @@ setup(
         "setuptools_scm",
     ],
     install_requires=[
-        "nexusforge@git+https://github.com/BlueBrain/nexus-forge",
+        "nexusforge",
         "requests"
     ],
     extras_require={
